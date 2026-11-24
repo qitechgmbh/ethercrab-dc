@@ -137,6 +137,13 @@ impl<const N: usize> FrameElement<N> {
         unsafe { (*addr_of_mut!((*fptr).status)).store(state, Ordering::Release) };
     }
 
+    /// Get the frame's current state.
+    pub(in crate::pdu_loop) unsafe fn state(this: NonNull<FrameElement<N>>) -> FrameState {
+        let fptr = this.as_ptr();
+
+        unsafe { (*addr_of!((*fptr).status)).load(Ordering::Acquire) }
+    }
+
     /// Atomically swap the frame state from `from` to `to`.
     ///
     /// If the frame is not currently in the given `from` state, this method will return an error

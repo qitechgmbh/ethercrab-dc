@@ -255,6 +255,19 @@ impl<'sto> PduStorageRef<'sto> {
         )
     }
 
+    /// Count the frames that have been sent and are waiting for a response from the network.
+    pub(in crate::pdu_loop) fn frames_awaiting_response(&self) -> usize {
+        (0..self.num_frames)
+            .filter(|&idx| {
+                let frame = self.frame_at_index(idx);
+
+                let state = unsafe { FrameElement::state(frame) };
+
+                state == FrameState::Sent
+            })
+            .count()
+    }
+
     pub(in crate::pdu_loop) fn frame_index_by_first_pdu_index(
         &self,
         search_pdu_idx: u8,

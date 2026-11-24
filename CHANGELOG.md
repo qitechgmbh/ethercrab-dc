@@ -6,6 +6,12 @@ A pure Rust EtherCAT MainDevice supporting std and no_std environments.
 
 ## [Unreleased] - ReleaseDate
 
+### Fixed
+
+- `tx_rx_task_io_uring` now recovers from lost, late and duplicate responses. Previously a lost
+  response blocked the TX/RX loop forever, and a late or duplicate response stopped it with an
+  error, so every following PDU timed out.
+
 ## [0.7.1] - 2026-03-23
 
 ### Fixed

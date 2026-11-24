@@ -40,6 +40,17 @@ impl<'sto> PduTx<'sto> {
         None
     }
 
+    /// The number of frames that have been sent and are still waiting for a response.
+    ///
+    /// Frames leave this state when their response is received, or when the future waiting on
+    /// them times out (either to be retried or released). TX/RX drivers that keep one pending
+    /// receive per outstanding frame can use this to avoid leaking receives for frames whose
+    /// responses are lost.
+    #[cfg_attr(not(all(target_os = "linux", feature = "io-uring")), allow(unused))]
+    pub(crate) fn frames_awaiting_response(&self) -> usize {
+        self.storage.frames_awaiting_response()
+    }
+
     /// Set or replace the PDU loop waker.
     ///
     /// The waker must be set otherwise the future in charge of sending new packets will not be
