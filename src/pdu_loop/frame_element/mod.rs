@@ -206,7 +206,7 @@ impl<const N: usize> FrameElement<N> {
     unsafe fn claim_receiving(this: NonNull<FrameElement<N>>) -> Option<NonNull<FrameElement<N>>> {
         unsafe { Self::swap_state(this, FrameState::Sent, FrameState::RxBusy) }
             .map_err(|actual_state| {
-                fmt::error!(
+                fmt::trace!(
                     "Failed to claim receiving frame {}: expected state {:?}, but got {:?}",
                     unsafe { *addr_of_mut!((*this.as_ptr()).storage_slot_index) },
                     FrameState::Sent,
@@ -247,7 +247,7 @@ impl<const N: usize> FrameElement<N> {
     }
 
     /// Clear first PDU.
-    unsafe fn clear_first_pdu(this: NonNull<FrameElement<0>>) {
+    pub(in crate::pdu_loop) unsafe fn clear_first_pdu(this: NonNull<FrameElement<0>>) {
         let first_pdu = unsafe { &*addr_of!((*this.as_ptr()).first_pdu) };
 
         first_pdu.store(FIRST_PDU_EMPTY, Ordering::Release);

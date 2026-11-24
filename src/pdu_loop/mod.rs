@@ -138,6 +138,116 @@ mod tests {
     use futures_lite::Future;
     use std::{sync::Arc, thread};
 
+    /// Send the next sendable frame and return the response a SubDevice would send back.
+    fn send_and_echo(tx: &mut crate::PduTx<'_>) -> Vec<u8> {
+        let frame = tx.next_sendable_frame().expect("sendable frame");
+
+        let mut sent = Vec::new();
+
+        frame
+            .send_blocking(|bytes| {
+                sent.extend_from_slice(bytes);
+
+                Ok(bytes.len())
+            })
+            .expect("send");
+
+        let mut frame = EthernetFrame::new_checked(sent).unwrap();
+        frame.set_src_addr(EthernetAddress([0x12, 0x10, 0x10, 0x10, 0x10, 0x10]));
+        frame.into_inner()
+    }
+
+    #[test]
+    fn late_response_is_ignored() {
+        crate::test_logger();
+
+        let storage = PduStorage::<1, 128>::new();
+        let (mut tx, mut rx, pdu_loop) = storage.try_split().unwrap();
+
+        let mut frame = pdu_loop.storage.alloc_frame().unwrap();
+        frame
+            .push_pdu(Command::fpwr(0x1000, 0x1234).into(), [0xaau8, 0xbb], None)
+            .unwrap();
+        let fut = frame.mark_sendable(&pdu_loop, MAX_TIMEOUT, 0);
+
+        let reply = send_and_echo(&mut tx);
+
+        // Same as the future timing out
+        drop(fut);
+
+        assert_eq!(rx.receive_frame(&reply), Ok(crate::ReceiveAction::Ignored));
+    }
+
+    #[test]
+    fn duplicate_response_is_ignored() {
+        crate::test_logger();
+
+        let storage = PduStorage::<1, 128>::new();
+        let (mut tx, mut rx, pdu_loop) = storage.try_split().unwrap();
+
+        let mut frame = pdu_loop.storage.alloc_frame().unwrap();
+        frame
+            .push_pdu(Command::fpwr(0x1000, 0x1234).into(), [0xaau8, 0xbb], None)
+            .unwrap();
+        let fut = frame.mark_sendable(&pdu_loop, MAX_TIMEOUT, 0);
+
+        let reply = send_and_echo(&mut tx);
+
+        assert_eq!(
+            rx.receive_frame(&reply),
+            Ok(crate::ReceiveAction::Processed)
+        );
+        drop(cassette::block_on(fut).expect("response"));
+
+        assert_eq!(rx.receive_frame(&reply), Ok(crate::ReceiveAction::Ignored));
+    }
+
+    #[test]
+    fn timed_out_frame_does_not_steal_response_after_pdu_index_wraps() {
+        crate::test_logger();
+
+        let storage = PduStorage::<2, 128>::new();
+        let (mut tx, mut rx, pdu_loop) = storage.try_split().unwrap();
+
+        let data = [0xaau8, 0xbb];
+
+        // Frame A in slot 0 is sent, then times out without a response.
+        let mut frame = pdu_loop.storage.alloc_frame().unwrap();
+        assert_eq!(frame.storage_slot_index(), 0);
+        frame
+            .push_pdu(Command::fpwr(0x1000, 0x1234).into(), data, None)
+            .unwrap();
+        let fut = frame.mark_sendable(&pdu_loop, MAX_TIMEOUT, 0);
+        send_and_echo(&mut tx);
+        drop(fut);
+
+        // The PDU index wraps around after 256 PDUs, so frame B in slot 1 gets the same first PDU
+        // index as A.
+        pdu_loop
+            .storage
+            .pdu_idx
+            .store(0, core::sync::atomic::Ordering::Relaxed);
+
+        let mut frame = pdu_loop.storage.alloc_frame().unwrap();
+        assert_eq!(frame.storage_slot_index(), 1);
+        let handle = frame
+            .push_pdu(Command::fpwr(0x1000, 0x1234).into(), data, None)
+            .unwrap();
+        let fut = frame.mark_sendable(&pdu_loop, MAX_TIMEOUT, 0);
+
+        let reply = send_and_echo(&mut tx);
+
+        // B's response must go to B, not to A's free slot.
+        assert_eq!(
+            rx.receive_frame(&reply),
+            Ok(crate::ReceiveAction::Processed)
+        );
+
+        let received = cassette::block_on(fut).expect("response");
+
+        assert_eq!(received.first_pdu(handle).unwrap().deref(), &data);
+    }
+
     #[test]
     fn timed_out_frame_is_reallocatable() {
         // One 16 byte frame

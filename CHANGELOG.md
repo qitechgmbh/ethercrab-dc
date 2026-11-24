@@ -11,6 +11,15 @@ A pure Rust EtherCAT MainDevice supporting std and no_std environments.
 - `tx_rx_task_io_uring` now recovers from lost, late and duplicate responses. Previously a lost
   response blocked the TX/RX loop forever, and a late or duplicate response stopped it with an
   error, so every following PDU timed out.
+- Fix responses being matched to free frame slots, causing `Failed to claim receiving frame X:
+  expected state Sent, but got None` / `InvalidIndex` errors. Frames that timed out kept their
+  first PDU index, so once the PDU index wrapped around, a newer frame's response could be sent to
+  the stale slot and dropped, making the newer frame time out too.
+
+### Changed
+
+- `PduRx::receive_frame` now returns `Ok(ReceiveAction::Ignored)` for a response that no frame is
+  waiting for (e.g. a late or duplicate response) instead of an error, so TX/RX loops keep running.
 
 ## [0.7.1] - 2026-03-23
 

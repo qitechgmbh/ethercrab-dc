@@ -461,7 +461,7 @@ fn set_blocking(fd: RawFd) -> io::Result<()> {
 mod tests {
     use super::*;
     use crate::{
-        PduStorage, Timeouts,
+        Command, PduStorage, Timeouts,
         ethernet::{EthernetAddress, EthernetFrame},
     };
     use std::{os::unix::net::UnixDatagram, thread, time::Duration};
@@ -539,6 +539,98 @@ mod tests {
         let expected = (0..12).map(|n| n != 1 && n != 3).collect::<Vec<_>>();
 
         assert_eq!(results, expected);
+
+        pdu_loop.reset_all();
+
+        tx_rx
+            .join()
+            .expect("TX/RX thread panicked")
+            .expect("TX/RX loop failed");
+    }
+
+    /// Wait for `BATCH` frames, then reply to them in reverse order.
+    fn subdevice_reversed<const BATCH: usize>(socket: UnixDatagram) {
+        let mut buf = [0u8; 1518];
+        let mut batch = Vec::with_capacity(BATCH);
+
+        loop {
+            let Ok(len) = socket.recv(&mut buf) else {
+                return;
+            };
+
+            let mut frame = EthernetFrame::new_checked(buf[..len].to_vec()).unwrap();
+            frame.set_src_addr(EthernetAddress([0x12, 0x10, 0x10, 0x10, 0x10, 0x10]));
+            batch.push(frame.into_inner());
+
+            if batch.len() == BATCH {
+                for reply in batch.drain(..).rev() {
+                    let _ = socket.send(&reply);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    fn out_of_order_responses() {
+        crate::test_logger();
+
+        if let Err(e) = IoUring::new(8) {
+            eprintln!("Skipping test, io_uring is not available: {e}");
+
+            return;
+        }
+
+        const BATCH: usize = 3;
+
+        static STORAGE: PduStorage<4, { PduStorage::element_size(64) }> = PduStorage::new();
+        let (tx, rx, mut pdu_loop) = STORAGE.try_split().unwrap();
+
+        let (ours, theirs) = UnixDatagram::pair().unwrap();
+
+        thread::spawn(move || subdevice_reversed::<BATCH>(theirs));
+
+        let tx_rx = thread::spawn(move || run(ours.as_raw_fd(), 1518, tx, rx).map(|_| ()));
+
+        let timeout = Timeouts {
+            pdu: Duration::from_secs(1),
+            ..Timeouts::default()
+        }
+        .pdu();
+
+        // Send a frame with a unique payload, returning the payload of the response it receives.
+        let send = |payload: [u8; 4]| {
+            let pdu_loop = &pdu_loop;
+
+            async move {
+                let mut frame = pdu_loop.alloc_frame()?;
+
+                let handle = frame.push_pdu(Command::fpwr(0x1000, 0x1234).into(), payload, None)?;
+
+                let frame = frame.mark_sendable(pdu_loop, timeout, 0);
+
+                pdu_loop.wake_sender();
+
+                let response = frame.await?.first_pdu(handle)?;
+
+                Ok::<_, Error>(response.to_vec())
+            }
+        };
+
+        for round in 0..4u8 {
+            let payloads = [[round, 0, 0, 0], [round, 1, 1, 1], [round, 2, 2, 2]];
+
+            let (a, (b, c)) = async_io::block_on(futures_lite::future::zip(
+                send(payloads[0]),
+                futures_lite::future::zip(send(payloads[1]), send(payloads[2])),
+            ));
+
+            assert_eq!(
+                [a.unwrap(), b.unwrap(), c.unwrap()],
+                payloads.map(|p| p.to_vec()),
+                "round {round}"
+            );
+        }
 
         pdu_loop.reset_all();
 

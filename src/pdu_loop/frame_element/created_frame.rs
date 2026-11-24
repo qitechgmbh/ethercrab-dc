@@ -335,7 +335,13 @@ impl Drop for CreatedFrame<'_> {
     fn drop(&mut self) {
         // ONLY free the frame if it's still in created state. If it's been moved into
         // sending/sent/receiving/etc, we must leave it alone.
-        let _ = self.inner.swap_state(FrameState::Created, FrameState::None);
+        //
+        // Nothing else can move the frame out of the created state, so checking first is race free.
+        if self.inner.state() == FrameState::Created {
+            self.inner.clear_first_pdu();
+
+            let _ = self.inner.swap_state(FrameState::Created, FrameState::None);
+        }
     }
 }
 

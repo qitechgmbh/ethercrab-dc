@@ -170,6 +170,10 @@ impl<'sto> FrameBox<'sto> {
         unsafe { FrameElement::swap_state(self.frame, from, to) }.map(|_| ())
     }
 
+    pub fn state(&self) -> FrameState {
+        unsafe { FrameElement::state(self.frame) }
+    }
+
     pub fn clear_first_pdu(&self) {
         unsafe {
             FrameElement::<0>::clear_first_pdu(self.frame);

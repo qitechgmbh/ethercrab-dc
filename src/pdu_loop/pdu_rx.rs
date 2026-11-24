@@ -1,9 +1,7 @@
 use super::storage::PduStorageRef;
 use crate::ethernet::{EthernetAddress, EthernetFrame};
 use crate::{
-    ETHERCAT_ETHERTYPE, MAINDEVICE_ADDR,
-    error::{Error, PduError},
-    fmt,
+    ETHERCAT_ETHERTYPE, MAINDEVICE_ADDR, error::Error, fmt,
     pdu_loop::frame_header::EthercatFrameHeader,
 };
 use core::sync::atomic::Ordering;
@@ -100,11 +98,17 @@ impl<'sto> PduRx<'sto> {
         // We're assuming all PDUs in the returned frame have the same frame index, so we can just
         // use the first one.
 
-        // PDU has its own EtherCAT index. This needs mapping back to the original frame.
-        let frame_index = self
-            .storage
-            .frame_index_by_first_pdu_index(pdu_idx)
-            .ok_or(Error::Pdu(PduError::Decode))?;
+        // PDU has its own EtherCAT index. This needs mapping back to the original frame. If no frame
+        // is waiting for it, this is a response that arrived after its frame timed out or was
+        // resent, or a duplicate. That's not an error for the TX/RX loop, so carry on.
+        let Some(frame_index) = self.storage.frame_index_by_first_pdu_index(pdu_idx) else {
+            fmt::warn!(
+                "Ignoring response with first PDU {:#04x}: no frame is waiting for it (late or duplicate response?)",
+                pdu_idx
+            );
+
+            return Ok(ReceiveAction::Ignored);
+        };
 
         fmt::trace!(
             "Receiving frame index {} (found from PDU {:#04x})",
@@ -112,10 +116,16 @@ impl<'sto> PduRx<'sto> {
             pdu_idx
         );
 
-        let mut frame = self
-            .storage
-            .claim_receiving(frame_index)
-            .ok_or(PduError::InvalidIndex(frame_index))?;
+        // The frame can stop waiting between finding it and claiming it, e.g. if it times out.
+        let Some(mut frame) = self.storage.claim_receiving(frame_index) else {
+            fmt::warn!(
+                "Ignoring response with first PDU {:#04x}: frame {} stopped waiting for it",
+                pdu_idx,
+                frame_index
+            );
+
+            return Ok(ReceiveAction::Ignored);
+        };
 
         let frame_data = frame.buf_mut();
 

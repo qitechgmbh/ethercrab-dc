@@ -194,6 +194,7 @@ impl<'sto> PduStorageRef<'sto> {
         for i in 0..self.num_frames {
             let frame = self.frame_at_index(i);
 
+            unsafe { FrameElement::<0>::clear_first_pdu(frame) };
             unsafe { FrameElement::set_state(frame, FrameState::None) };
         }
     }
@@ -282,7 +283,11 @@ impl<'sto> PduStorageRef<'sto> {
                 )
             };
 
-            if unsafe { FrameElement::<0>::first_pdu_is(frame, search_pdu_idx) } {
+            // Only frames waiting for a response can match. This stops a response being sent to a
+            // free slot that still holds a stale index, instead of the frame that's waiting for it.
+            if unsafe { FrameElement::<0>::first_pdu_is(frame, search_pdu_idx) }
+                && unsafe { FrameElement::state(frame) } == FrameState::Sent
+            {
                 return Some(frame_index as u8);
             }
         }

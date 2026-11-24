@@ -95,6 +95,10 @@ impl<'sto> ReceiveFrameFut<'sto> {
     }
 
     fn release(r: FrameBox<'sto>) {
+        // Clear the first PDU index so a late response to this frame doesn't match the free slot.
+        // Must happen before the slot is freed so it can't wipe the index of a new frame in it.
+        r.clear_first_pdu();
+
         // Make frame available for reuse if this future is dropped.
         r.set_state(FrameState::None);
     }

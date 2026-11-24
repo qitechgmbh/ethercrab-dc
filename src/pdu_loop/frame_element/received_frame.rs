@@ -151,15 +151,17 @@ impl<'sto> ReceivedFrame<'sto> {
 
 impl Drop for ReceivedFrame<'_> {
     fn drop(&mut self) {
+        // Set frame empty sentinel so we don't get false-positive matches when receiving frames.
+        // This must happen before the slot is freed, otherwise it could wipe the first PDU index
+        // of a new frame allocated in this slot by another thread.
+        self.inner.clear_first_pdu();
+
         // Invariant: the frame can only be in `RxProcessing` at this point, so if this swap fails
         // there's either a logic bug, or we should panic anyway because the hardware failed.
         fmt::unwrap!(
             self.inner
                 .swap_state(FrameState::RxProcessing, FrameState::None)
         );
-
-        // Set frame empty sentinel so we don't get false-positive matches when receiving frames
-        self.inner.clear_first_pdu();
     }
 }
 
